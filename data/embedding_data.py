@@ -42,7 +42,7 @@ class VLEmbeddingDataset(Dataset):
         if extra_text_embedding_list:
             print(f"Loading extra text vectors from {extra_text_embedding_list}")
             self.extra_text_vectors, _ = self._load_image_text_vectors(text_embedding_list = extra_text_embedding_list)
-            assert len(self.extra_text_vectors) == len(self.text_vectors), f"extra text vectors length {len(self.extra_text_vectors)} is not equal to text vectors length {len(self.text_vectors)}"
+            assert len(self.extra_text_vectors) == len(self.text_vectors), f"extra text vectors {extra_text_embedding_list} length {len(self.extra_text_vectors)} is not equal to text vectors length {len(self.text_vectors)}"
     
         if train_num_samples is not None:
             num_samples = len(self.text_vectors)
@@ -56,8 +56,8 @@ class VLEmbeddingDataset(Dataset):
         self.image_num = len(self.image_vectors)
         self.text_num = len(self.text_vectors)
 
-        self.visual_dim = self.image_vectors[0].shape[-1]
-        self.text_dim = self.text_vectors[0].shape[-1]
+        self.visual_dim = self.image_vectors[0].shape[-1] if len(self.image_vectors[0].shape) == 1 else self.image_vectors[0].shape[1]
+        self.text_dim = self.text_vectors[0].shape[-1] if len(self.text_vectors[0].shape) == 1 else self.text_vectors[0].shape[1]
         
     def _load_image_text_vectors(self, image_embedding_list = None, text_embedding_list = None):
         assert image_embedding_list is not None or text_embedding_list is not None, "Either image_embedding_list or text_embedding_list must be provided"

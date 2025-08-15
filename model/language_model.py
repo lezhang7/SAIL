@@ -33,7 +33,7 @@ def bos_pooling(model_output: torch.Tensor, attention_mask):
 MODEL_EMBEDDING_TYPE={
     'mean': ['sentence-transformers/all-mpnet-base-v2'],
     'BOS' : ['Alibaba-NLP/gte-large-en-v1.5','Alibaba-NLP/gte-base-en-v1.5'],
-    "LastToken": ['Alibaba-NLP/gte-Qwen2-7B-instruct',"Alibaba-NLP/gte-Qwen2-1.5B-instruct"],
+    "LastToken": ['Alibaba-NLP/gte-Qwen2-7B-instruct',"Alibaba-NLP/gte-Qwen2-1.5B-instruct","Qwen/Qwen3-Embedding-0.6B"],
 }
 
 POOL_CLASSES = {

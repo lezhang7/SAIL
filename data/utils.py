@@ -6,19 +6,27 @@ from tqdm import tqdm
 import itertools    
 import time
 import pandas as pd
+from data.data_config import DATADIR
 
 
 # instruction = "Summarize the following sentences: "
 instruction = ""
 
-def load_data(data_config, source_caption, domain):
-    data_file = data_config['annotation']
+def load_data(args):
+    data_name, source_caption, domain = args.data, args.source_caption, args.domain
+    if data_name in DATADIR:
+        data_config = DATADIR[data_name]
+        data_file = data_config['annotation']
+    else:
+        data_file = data_name
     if data_file.endswith('.json'):
         return load_json_data(data_file, data_config['imagedir'])
     elif data_file.endswith('.jsonl'):
         return load_jsonl_data(data_file, data_config['imagedir'])
     elif data_file.endswith('.csv'):
         return load_csv_data(data_file, data_config['imagedir'], source_caption, domain)
+    elif data_file.endswith('.tar') or '.tar' in data_file:
+        return load_wds_data(data_file, domain, args.batch_size)
     else:
         raise ValueError('Unsupported data format')
 
@@ -76,3 +84,42 @@ def load_csv_data(data_file, image_dir, source_caption, domain):
         sentences = [instruction + sentence for sentence in sentences]
     
     return sentences, images
+
+def load_wds_data(data_file, domain, batch_size):
+    """
+    Load data from WebDataset format (.tar files)
+    
+    Args:
+        data_file: Path to WebDataset .tar file or URL pattern (e.g., 'datasets/cc3m_recap/cc3m-train-{0000..0575}.tar')
+        data_config: Configuration dictionary containing dataset details
+        source_caption: Caption field to use
+        domain: 'text' or 'image' domain to process
+        
+    Returns:
+        sentences, images: Lists of sentences and image paths/tensors
+    """
+    import webdataset as wds
+    
+    # Handle sharded dataset patterns
+    print(f"Loading WebDataset from: {data_file}")
+    # Create dataset with appropriate handler for the specific domain
+    if domain == 'image':
+        # For image domain, extract image data
+        dataset = (
+            wds.WebDataset(data_file)
+            .select(lambda x: 'jpg' in x or 'png' in x)
+            .decode('pil')
+            .to_tuple('jpg;png')
+            .batched(batch_size)
+        )
+        
+    elif domain == 'text':
+        # For text domain, extract caption data
+        dataset = (
+            wds.WebDataset(data_file)
+            .decode()
+            .to_tuple('json')
+            .batched(batch_size)
+        )
+ 
+    return dataset

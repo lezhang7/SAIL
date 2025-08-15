@@ -154,9 +154,10 @@ def main(args):
         text_model_name = args.text_model,
         vision_model_name = args.vision_model,
         head_weights_path = args.head_weights_path,
-        vision_dimesion = data['train'].data_info['visual_dim'],
-        text_dimension = data['train'].data_info['text_dim'],
-        target_dimension = args.target_dimension,
+        vision_dim = data['train'].data_info['visual_dim'],
+        text_dim = data['train'].data_info['text_dim'],
+        hidden_dim = args.hidden_dim,
+        output_dim = args.output_dim,
         precision = args.precision,
         device = device,
         linear_type = args.linear_type,
@@ -189,7 +190,7 @@ def main(args):
 
         # Save model configuration as YAML file
         model_config = {
-            'target_dimension': args.target_dimension,
+            'output_dim': args.output_dim,
             'linear_type': args.linear_type,
         }
         
@@ -233,7 +234,7 @@ def main(args):
                 betas=(args.beta1, args.beta2),
                 eps=args.eps,
             )
-        scaler = torch.amp.GradScaler() if args.precision == "amp" else None
+        scaler = torch.cuda.amp.GradScaler() if args.precision == "amp" else None
 
     # optionally resume from a checkpoint
     

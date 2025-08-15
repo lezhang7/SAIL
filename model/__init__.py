@@ -31,9 +31,10 @@ def create_model(
         text_model_name:Optional[str] = None, 
         vision_model_name:Optional[str] = None, 
         head_weights_path:Optional[str] = None,
-        vision_dimesion:int = 1536,
-        text_dimension:int = 768,
-        target_dimension:int = 512,
+        vision_dim:int = 1536,
+        text_dim:int = 768,
+        hidden_dim:int = 1024,
+        output_dim:int = 512,
         precision: str = 'fp32', 
         device: Union[str, torch.device] = 'cpu', 
         linear_type: str = 'star',
@@ -42,6 +43,7 @@ def create_model(
         agg_mode: str = 'concat',
         width_factor: int = 8,
         sharelock: bool = False,
+        
 ):  
     if isinstance(device, str):
         device = torch.device(device)
@@ -53,7 +55,8 @@ def create_model(
         model = SAILModel(
             text_model_name=text_model_name, 
             vision_model_name=vision_model_name, 
-            target_dimension=target_dimension, 
+            hidden_dim=hidden_dim,
+            output_dim=output_dim, 
             vlhead_weights_path=head_weights_path, 
             linear_type=linear_type, 
             cast_dtype=cast_dtype, 
@@ -63,9 +66,10 @@ def create_model(
         )
     else:
        model = LayerClass(
-            vision_dimesion, 
-            text_dimension, 
-            target_dimension, 
+            vision_dim=vision_dim, 
+            text_dim=text_dim, 
+            hidden_dim=hidden_dim,
+            output_dim=output_dim, 
             linear_type=linear_type, 
             cast_dtype=cast_dtype, 
             logit_scale=logit_scale, 

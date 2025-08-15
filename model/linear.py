@@ -9,8 +9,7 @@ class StarMLP(nn.Module):
         self,
         input_dim: int,
         output_dim: int,
-        width_factor: int ,
-        intermediate_dim: Optional[int] = None,
+        width_factor: int = 4,
         activation: Optional[Callable] = None,
     ):
         super().__init__()
@@ -62,63 +61,80 @@ class ShareLockMLP(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
-
-
-
-
-# v2
-class SwiGLU(nn.Module):
+class VQDenseNetLayer(nn.Module):
     def __init__(self, input_dim, output_dim):
-        super(SwiGLU, self).__init__()
-        self.linear1 = nn.Linear(input_dim, output_dim)
-        self.linear2 = nn.Linear(input_dim, output_dim)
+        super(VQDenseNetLayer, self).__init__()
+        self.layer_norm = nn.LayerNorm(input_dim)
+        self.mlp = StarMLP(input_dim, output_dim)
 
-    def forward(self, x):
-        return self.linear1(x) * F.silu(self.linear2(x))
+    def forward(self, x, residual=False):
+        if residual:
+            x = x + self.mlp(self.layer_norm(x))
+        else:
+            x = self.mlp(self.layer_norm(x))
+        return x
 
-class SiglipMLP(nn.Module):
+
+class VQDenseNet(nn.Module):
+    """
+    Network that processes 8x16x16 feature maps with position embeddings and GLU-based MLP
+    """
     def __init__(
         self,
-        input_dim: int,
+        hidden_dim: int,
         output_dim: int,
-        intermediate_dim: Optional[int] = None,
+        num_layers: int = 4,
+        dropout: float = 0.1
     ):
         super().__init__()
-        intermediate_dim = intermediate_dim if intermediate_dim is not None else 4*input_dim
-        self.proj = nn.Sequential(
-            nn.Linear(input_dim, intermediate_dim),
-            nn.GELU(),
-            nn.Linear(intermediate_dim, output_dim),
+        
+        # Input dimensions: 8 channels, 16x16 spatial
+        self.num_channels = 8
+        self.spatial_size = 16
+        self.input_size = self.num_channels * self.spatial_size * self.spatial_size  # 8 * 16 * 16 = 2048
+        
+        # Learnable position embeddings for each 16x16 feature map
+        self.position_embeddings = nn.Parameter(
+            torch.randn(self.num_channels, self.spatial_size, self.spatial_size) * 0.02
         )
+        
+        self.layers = nn.ModuleList()
+        self.layers.append(VQDenseNetLayer(self.input_size, hidden_dim))
+        for _ in range(num_layers - 1):
+            self.layers.append(VQDenseNetLayer(hidden_dim, hidden_dim))
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights using Xavier initialization"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+    
+    def forward(self, feature_map: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            feature_map: Tensor of shape (batch_size, 8, 16, 16)
+        
+        Returns:
+            Tensor of shape (batch_size, output_dim)
+        """
+        batch_size = feature_map.size(0)
+        
+        # Add position embeddings to each 16x16 feature map
+        # feature_map: (B, 8, 16, 16), position_embeddings: (8, 16, 16)
+        feature_map = feature_map + self.position_embeddings.unsqueeze(0)
+        
+        # Linearize (flatten) the feature map
+        hidden_states = feature_map.view(batch_size, -1)  # (B, 8*16*16)
+        
+        # Pass through GLU-based MLP layers with residual connections
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return  self.proj(hidden_states)
-
-# v6 fast weight programming
-# class StarMLP(nn.Module):
-#     def __init__(
-#         self,
-#         input_dim: int,
-#         output_dim: int,
-#         compress_dim: Optional[int] = 256,
-#         intermediate_dim: Optional[int] = None,
-#     ):
-#         super().__init__()
-#         intermediate_dim = intermediate_dim if intermediate_dim is not None else output_dim
-#         self.compression = nn.Linear(input_dim, compress_dim)
-#         self.Wa = nn.Linear(compress_dim, compress_dim, bias=False)
-#         self.Wb = nn.Linear(compress_dim, compress_dim, bias=False)
-#         self.g = nn.Linear(compress_dim, output_dim, bias=False)
-#         self.act = nn.ReLU6()
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         x = self.compression(x)
-#         a = self.Wa(x)  # N x d
-#         b = self.Wb(x)  # N x d
-#         x = torch.einsum('bij,bj->bi', torch.sigmoid(a.unsqueeze(-1) * b.unsqueeze(1)), x)
-#         x = self.g(self.act(x))
-
-#         assert not torch.isnan(x).any(), "Output contains NaN"
-#         assert not torch.isinf(x).any(), "Output contains infinite values"
-
-#         return x
+        for i, layer in enumerate(self.layers):
+            if i == 0:
+                hidden_states = layer(hidden_states)
+            else:
+                hidden_states = layer(hidden_states, residual=True)
+        
+        return hidden_states

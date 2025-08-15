@@ -28,3 +28,4 @@ torch==2.5.0
 torchvision==0.16.2
 tqdm==4.65.0
 transformers==4.47.0.dev0
+webdataset==0.2.48

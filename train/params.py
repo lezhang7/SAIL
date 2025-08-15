@@ -80,22 +80,28 @@ def parse_args(args):
         help="Path to head weight",
     )
     parser.add_argument(
-        "--vision-dimesion",
+        "--vision-dim",
         type=int,
         default=1536,
         help="Dimension of vision embeddings. Default set to 1536 for DINOv2-base.",
     )
     parser.add_argument(
-        "--text-dimension",
+        "--text-dim",
         type=int,
         default=768,
         help="Dimension of text embeddings. Default set to 768 for all-mpnet-base-v2.",
     )
     parser.add_argument(
-        "--target-dimension",
+        "--output-dim",
         type=int,
         default=512,
         help="Dimension of text embeddings. Default set to 768 for all-mpnet-base-v2.",
+    )
+    parser.add_argument(
+        "--hidden-dim",
+        type=int,
+        default=1024,
+        help="Dimension of hidden layer.",
     )
     parser.add_argument(
         "--width-factor",

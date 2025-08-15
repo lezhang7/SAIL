@@ -1,0 +1,7 @@
+/logs
+/wandb
+data/
+data_preparation/datasets/
+data_preparation/slurm_logs/
+model/backbone_checkpoints/
+slurm_logs/

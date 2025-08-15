@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # -----------------------MODEL SETTING------------------------
-vision_model="facebook/dinov2-base"
+vision_model="VQ-16"
+# vision_model="facebook/dinov2-base"
 # vision_model="facebook/dinov2-large"
 # vision_model="ijepa-huge"
 # vision_model="facebook/dinov2-giant"

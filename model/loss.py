@@ -345,31 +345,6 @@ class SigLipLoss(nn.Module):
         labels = -torch.ones((num_logits, num_logits), device=device, dtype=dtype)
         labels = 2 * torch.eye(num_logits, device=device, dtype=dtype) + labels
         return labels
-
-    
-    def random_mask(self, v1, v2, r: float):
-        """
-        随机从每个向量中挑选 k 个维度，同时保证梯度传导
-        :param v1: 第一个向量, 形状为 (n, d)
-        :param v2: 第二个向量, 形状为 (n, d)
-        :param r: 选择的维度比例（例如 0.5 表示选择一半的维度）
-        :return: 选中的维度对应的子向量 v1 和 v2
-        """
-        assert v1.shape == v2.shape, "两个张量的形状必须相同"
-        n, d = v1.shape
-        k = int(d * r)
-        
-        # 获取 v1 所在设备
-        device = v1.device
-        
-        # 在相同的设备上生成随机索引
-        indices = torch.randperm(d, device=device)[:k]  # 从 d 中随机选择 k 个不重复的索引
-        # 选取对应维度
-        selected_v1 = v1[:, indices]  # 使用高级索引选择维度
-        selected_v2 = v2[:, indices]
-        
-        return selected_v1, selected_v2
-
     
     def get_logits(self, image_features, text_features, logit_scale, logit_bias=None):
         logits = logit_scale * image_features @ text_features.T

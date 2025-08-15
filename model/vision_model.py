@@ -17,6 +17,7 @@ from .dinoforseg import Dinov2EncoderForSegmentation
 from .mae import get_mae_vit
 from .ibot import get_ibot_vit
 from .ijepa import get_ijepa_vit
+from .vq_model import get_vq_model
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -33,27 +34,26 @@ def modify_vit(type_: str) -> None:
         pass
 
 class CustomImageProcessor(ImageProcessingMixin):
-    def __init__(self, size=224):
+    def __init__(self, size=224, is_vq=False):
         super().__init__()
-        # 定义图像预处理流水线
-        self.image_processor = pth_transforms.Compose([
-            pth_transforms.Resize(256, interpolation=pth_transforms.InterpolationMode.BICUBIC),
-            pth_transforms.CenterCrop(size),
-            pth_transforms.ToTensor(),
-            pth_transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-
+        if is_vq:
+            self.image_processor = pth_transforms.Compose([
+                pth_transforms.Resize(256, interpolation=pth_transforms.InterpolationMode.BICUBIC),
+                pth_transforms.ToTensor(),
+                pth_transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            ])
+        else:
+            self.image_processor = pth_transforms.Compose([
+                pth_transforms.Resize(256, interpolation=pth_transforms.InterpolationMode.BICUBIC),
+                pth_transforms.CenterCrop(size),
+                pth_transforms.ToTensor(),
+                pth_transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
     def __call__(self, images, return_tensors=None):
         if not isinstance(images, list):
             images = [images]
-        # 处理单个图像或批量图像
-    
         processed_images = [self.image_processor(image) for image in images]
-        # 将图像堆叠为一个 tensor
         processed_images = torch.stack(processed_images)
-   
-        
-        # 返回 tensor，如果指定了 `return_tensors='pt'`
         if return_tensors == 'pt':
             return processed_images
         else:
@@ -68,7 +68,7 @@ class ImageEmbedding(nn.Module):
         self.agg_mode = agg_mode
         self.model_name = model_name
 
-        if any(x in model_name for x in ['ibot', 'mae', 'dinov1', 'ml-aim', 'ijepa']):
+        if any(x in model_name for x in ['ibot', 'mae', 'dinov1', 'ml-aim', 'ijepa', 'VQ']):
             # load from local
             if 'ibot' in model_name:
                 self.model = get_ibot_vit(model_name)
@@ -76,6 +76,8 @@ class ImageEmbedding(nn.Module):
                 self.model = get_mae_vit(model_name)
             elif 'ijepa' in model_name:
                 self.model = get_ijepa_vit(model_name)
+            elif 'VQ' in model_name:
+                self.model = get_vq_model(model_name)
             # load from torch hub
             elif 'dinov1' in model_name:
                 if 'vitb16' in model_name:
@@ -93,9 +95,11 @@ class ImageEmbedding(nn.Module):
                     self.model.embed_dim = 1536
                 else:
                     raise ValueError(f"Invalid model name: {model_name}")
+            else:
+                raise ValueError(f"Invalid model name: {model_name}")
             self.model = self.model.to(self.device).half()
             self.model.dtype = torch.float16
-            self.image_processor = CustomImageProcessor()
+            self.image_processor = CustomImageProcessor(is_vq= 'VQ' in model_name)
         
         # load from huggingface
         elif not seg and any(x in model_name.lower() for x in ['dinov2']) and version.parse(transformers.__version__) >= version.parse("4.46.0"):
@@ -117,29 +121,48 @@ class ImageEmbedding(nn.Module):
             self.model = AutoModel.from_pretrained(model_name, attn_implementation="eager", torch_dtype=torch.float16)
             self.image_processor = AutoImageProcessor.from_pretrained(model_name)
 
-    def load_images_from_directory(self, images_path: List[str]) -> List[Image.Image]:
 
-        def load_single_image(args):
-            idx, image_path = args
-            with Image.open(image_path) as img:
-                return idx, img.convert("RGB")
+    def get_visual_embeddings_from_list(self, images: List[Image.Image]):
+        images_tensor = self.image_processor(images, return_tensors="pt").to(self.device, dtype=self.model.dtype)
+        with torch.autocast(device_type=self.device, dtype=self.model.dtype):
+            with torch.no_grad():
+                return self.forward(images_tensor)
+    
+    def get_visual_embeddings(self, images_tensor: List[torch.Tensor]):
+        """
+        Process pre-loaded image tensors (e.g., from WebDataset)
         
-        images = [None] * len(images_path)
-        with ThreadPoolExecutor() as executor:
-            # Submit tasks with indices to maintain order
-            futures = {executor.submit(load_single_image, (i, path)): i 
-                      for i, path in enumerate(images_path)}
+        Args:
+            images_tensor: List of image tensors already loaded
             
-            # Collect results in order
-            for future in as_completed(futures):
-                idx, img = future.result()
-                images[idx] = img
+        Returns:
+            Embeddings from the vision model
+        """
+        # Convert list of tensors to batch if needed
+        if isinstance(images_tensor, list):
+            # Check if images need preprocessing
+            if len(images_tensor[0].shape) == 3:  # If [C, H, W] format
+                # Apply normalization if images are already in tensor format but not normalized
+                normalized_images = []
+                for img_tensor in images_tensor:
+                    # Convert to float and normalize if needed
+                    if img_tensor.max() > 1.0:  # Images in 0-255 range
+                        img_tensor = img_tensor.float() / 255.0
+                    
+                    # Apply normalization with ImageNet stats
+                    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(img_tensor.device)
+                    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(img_tensor.device)
+                    normalized_images.append((img_tensor - mean) / std)
                 
-        return images
-
-    def get_visual_embeddings_from_directory(self, images_path: List[str]):
-        images = self.load_images_from_directory(images_path)
-        inputs = self.image_processor(images, return_tensors="pt").to(self.device, dtype=self.model.dtype)
+                # Stack into batch
+                inputs = torch.stack(normalized_images).to(self.device, dtype=self.model.dtype)
+            else:
+                # If already batched or in proper format
+                inputs = torch.stack(images_tensor).to(self.device, dtype=self.model.dtype)
+        else:
+            # If already a batched tensor
+            inputs = images_tensor.to(self.device, dtype=self.model.dtype)
+            
         with torch.autocast(device_type=self.device, dtype=self.model.dtype):
             with torch.no_grad():
                 return self.forward(inputs)
@@ -164,7 +187,11 @@ class ImageEmbedding(nn.Module):
                 outputs = self.model.forward_features(inputs['pixel_values'])
         else:
             if isinstance(inputs, torch.Tensor):
-                outputs = self.model(inputs)
+                if any(x in self.model_name.lower() for x in ['vq']):
+                    outputs = self.model.encode(inputs)
+                    
+                else:
+                    outputs = self.model(inputs)
             elif isinstance(inputs, dict) or isinstance(inputs, BaseBatchFeature):
                 if any(x in self.model_name.lower() for x in ['ibot', 'dinov1', 'ml-aim', 'ijepa']):
                     outputs = self.model(inputs['pixel_values'])
@@ -174,9 +201,12 @@ class ImageEmbedding(nn.Module):
             else:
                 raise ValueError(f"Unsupported input type: {type(inputs)}")
             
+
         # extract the embeddings
         if any(x in self.model_name.lower() for x in ['ijepa']):
             embedding = outputs.mean(dim=1)
+        elif any(x in self.model_name.lower() for x in ['vq']):
+            embedding = outputs[0]
         elif any(x in self.model_name.lower() for x in ['clip']):
             embedding = outputs.pooler_output
         elif any(x in self.model_name.lower() for x in ['aimv2']):
@@ -210,8 +240,8 @@ class ImageEmbedding(nn.Module):
 
 if __name__ == "__main__":
     processor = ImageEmbedding()
-    breakpoint()
     image_dirs = ["path/to/dir1", "path/to/dir2"]
-    hidden_states = processor.get_visual_embeddings_from_directory(image_dirs)
+    hidden_states = processor.get_visual_embeddings_from_list(image_dirs)
     for states in hidden_states:
         print(list(states.shape))
+    breakpoint()

@@ -1,9 +1,19 @@
 #!/bin/bash
+#SBATCH --job-name=encode
+#SBATCH --partition=long                    # Ask for unkillable job
+#SBATCH --cpus-per-task=16                             # Ask for 2 CPUs
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:a100l:1
+#SBATCH --ntasks-per-node=1                                  # Ask for 1 GPU
+#SBATCH --mem=128G           
+#SBATCH --time=48:00:00                                    
+#SBATCH --output=./slurm_logs/encode/job_output-%j.txt
+#SBATCH --error=./slurm_logs/encode/job_error-%j.txt 
 
 #==============================================================================#
 #                              VISION MODEL                                      #
 #==============================================================================#
-vision_model="apple/aimv2-large-patch14-224"
+vision_model="VQ-16"
 # Available options:
 # vision_model="ijepa-huge"                    # IJEPA
 # vision_model="openai/clip-vit-large-patch14" # OpenAI CLIP
@@ -26,7 +36,8 @@ text_model="nvidia/NV-Embed-v2"
 #==============================================================================#
 #                                 DATA                                           #
 #==============================================================================#
-data="dreamclipcc3m"
+data='data_preparation/datasets/dreamlipcc3m/{00000..00574}.tar'
+# data='data_preparation/datasets/dreamlipcc12m/{00000..02043}.tar'
 # Available options:
 # data="dreamclipcc3m"      # DreamCLIP CC-3M
 # data="dreamclipcc12mhf"  # DreamCLIP CC-12M high-fidelity
@@ -42,7 +53,7 @@ domain="image" # "image" or "text", each time we only encode one modality
 #==============================================================================#
 #                             BATCH SIZE                                         #
 #==============================================================================#
-batch_size=1024 # adjust based on GPU memory
+batch_size=512 # adjust based on GPU memory
 #==============================================================================#
 #                           Additional options                                  #
 #==============================================================================#
@@ -51,7 +62,7 @@ batch_size=1024 # adjust based on GPU memory
 # HQ Short captions: shortIB_captions, shortSV_captions, shortLLA_captions
 # Raw caption:    raw_caption
 # agg_mode: "concat" (concatenate cls with all patch tokens and average pool) or "cls" (use cls token only)
-source_caption="longSV_captions"
+source_caption="shortSV_captions"
 agg_mode="concat"
 
 

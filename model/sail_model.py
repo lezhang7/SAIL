@@ -9,8 +9,7 @@ from .vision_model import ImageEmbedding
 import torch.nn.functional as F
 import torch
 from transformers.activations import ACT2FN
-from .linear import StarMLP, SiglipMLP, SwiGLU, ShareLockMLP
-from torch.cuda.amp import autocast
+from .linear import StarMLP, ShareLockMLP, VQDenseNet
 from functools import partial
 import numpy as np
 
@@ -18,9 +17,10 @@ import numpy as np
 class AlignmentLayer(nn.Module):
     def __init__(
         self,
-        vision_dimesion: int,
-        text_dimension: int = None,
-        target_dimension: int = 1024,
+        vision_dim: int,
+        text_dim: int,
+        hidden_dim: int = 1024,
+        output_dim: int = 512,
         linear_type: str = "star",
         cast_dtype: Optional[torch.dtype] = None,
         logit_scale: float = 10.0,
@@ -29,27 +29,41 @@ class AlignmentLayer(nn.Module):
         width_factor: int = 8,
     ):
         super(AlignmentLayer, self).__init__()
-        assert only_vision or text_dimension is not None, "text_dimension must be provided if only_vision is False"
+        assert only_vision or text_dim is not None, "text_dim must be provided if only_vision is False"
 
         self.cast_dtype = cast_dtype
         self.linear_type = linear_type
-        if linear_type == "star":
-            LinearLayer = partial(StarMLP, width_factor=width_factor, activation=nn.ReLU6())
-        elif linear_type == "mlp":
-            LinearLayer = SiglipMLP
+        
+        # Set up vision mapping network
+        if linear_type == "vqdensify":
+            self.vision_mapping_network = VQDenseNet(hidden_dim,hidden_dim)
         else:
-            LinearLayer = nn.Linear
+            if linear_type == "star":
+                VisionLayer = partial(StarMLP, width_factor=width_factor, activation=nn.ReLU6())
+            else:
+                VisionLayer = nn.Linear
+            self.vision_mapping_network = VisionLayer(vision_dim, hidden_dim)
 
-        self.vision_mapping_network = LinearLayer(
-            vision_dimesion, target_dimension
-        )
-        self.vision_layer_norm = nn.LayerNorm(vision_dimesion)
+        self.vision_pre_layernorm = nn.LayerNorm(vision_dim)
+        self.vision_post_layernorm = nn.LayerNorm(hidden_dim)
+        self.vision_output_proj = nn.Linear(hidden_dim, output_dim)
 
+        # Text mapping network always uses StarMLP if vqdensify, otherwise follows linear_type
         if not only_vision:
-            self.text_mapping_network = LinearLayer(
-                text_dimension, target_dimension
-            )
-            self.text_layer_norm = nn.LayerNorm(text_dimension)
+            if linear_type == "vqdensify":
+                self.text_mapping_network = StarMLP(
+                    text_dim, 
+                    hidden_dim,
+                    width_factor=width_factor,
+                    activation=nn.ReLU6()
+                )
+            else:
+                self.text_mapping_network = self.vision_mapping_network.__class__(
+                    text_dim, output_dim
+                )
+            self.text_pre_layernorm = nn.LayerNorm(text_dim)
+            self.text_post_layernorm = nn.LayerNorm(hidden_dim)
+            self.text_output_proj = nn.Linear(hidden_dim, output_dim)
 
         self.logit_scale = nn.Parameter(torch.randn(1))
         self.logit_bias = nn.Parameter(torch.randn(1))
@@ -87,22 +101,28 @@ class AlignmentLayer(nn.Module):
             )
         if image_features is not None:
             image_features = image_features.to(self.cast_dtype)
-            image_features = self.vision_layer_norm(image_features)
+            image_features = self.vision_pre_layernorm(image_features)
             image_features = self.vision_mapping_network(image_features)
+            image_features = self.vision_post_layernorm(image_features)
+            image_features = self.vision_output_proj(image_features)
         else:
             image_features = None
 
         if text_features is not None:
             text_features = text_features.to(self.cast_dtype)
-            text_features = self.text_layer_norm(text_features)
+            text_features = self.text_pre_layernorm(text_features)
             text_features = self.text_mapping_network(text_features)
+            text_features = self.text_post_layernorm(text_features)
+            text_features = self.text_output_proj(text_features)
         else:
             text_features = None
 
         if extra_text_features is not None:
             extra_text_features = extra_text_features.to(self.cast_dtype) 
-            extra_text_features = self.text_layer_norm(extra_text_features)
+            extra_text_features = self.text_pre_layernorm(extra_text_features)
             extra_text_features = self.text_mapping_network(extra_text_features)
+            extra_text_features = self.text_post_layernorm(extra_text_features)
+            extra_text_features = self.text_output_proj(extra_text_features)
         else: 
             extra_text_features = None
 
@@ -130,9 +150,9 @@ class AlignmentLayer(nn.Module):
 class ShareLockAlignmentLayer(nn.Module):
     def __init__(
         self,
-        vision_dimesion: int,
-        text_dimension: int = None,
-        target_dimension: int = None,
+        vision_dim: int,
+        text_dim: int = None,
+        output_dim: int = None,
         linear_type: str = None,
         cast_dtype: Optional[torch.dtype] = None,
         logit_scale: float = np.log(1 / 0.07),
@@ -143,13 +163,13 @@ class ShareLockAlignmentLayer(nn.Module):
         super(ShareLockAlignmentLayer, self).__init__()
         self.cast_dtype = cast_dtype
         # no vision alignment layer overhead
-        target_dimension = vision_dimesion 
+        output_dim = vision_dim 
         hidden_dim = 4096
         self.text_mapping_network = ShareLockMLP(
-            text_dimension, hidden_dim, target_dimension
+            text_dim, hidden_dim, output_dim
         )
      
-        self.text_layer_norm = nn.LayerNorm(text_dimension)
+        self.text_pre_layernorm = nn.LayerNorm(text_dim)
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         self.logit_bias = nn.Parameter(torch.ones([]) * -10.0)
         self._initialize_weights(logit_scale, logit_bias)
@@ -182,7 +202,7 @@ class ShareLockAlignmentLayer(nn.Module):
 
         if text_features is not None:
             text_features = text_features.to(self.cast_dtype)
-            text_features = self.text_layer_norm(text_features)
+            text_features = self.text_pre_layernorm(text_features)
             text_features = self.text_mapping_network(text_features)
         else:
             text_features = None
@@ -215,7 +235,7 @@ class SAILModel(nn.Module):
         self,
         vision_model_name: str,
         text_model_name: str,
-        target_dimension: int,
+        output_dim: int,
         vlhead_weights_path: str = None,
         linear_type: str = "linear",
         cast_dtype: Optional[torch.dtype] = None,
@@ -229,22 +249,22 @@ class SAILModel(nn.Module):
         self.vision_model = ImageEmbedding(vision_model_name, seg=seg, agg_mode=agg_mode)
         if any(x in vision_model_name for x in ['mae','ibot','dinov1','ml-aim','ijepa','clip','aimv2']) or 'patch' in agg_mode or 'cls' in agg_mode:
             if hasattr(self.vision_model.model, 'config'):
-                vision_dimesion = self.vision_model.model.config.hidden_size
+                vision_dim = self.vision_model.model.config.hidden_size
             else:
-                vision_dimesion = self.vision_model.model.embed_dim
+                vision_dim = self.vision_model.model.embed_dim
         else:
-            vision_dimesion = self.vision_model.model.config.hidden_size * 2
+            vision_dim = self.vision_model.model.config.hidden_size * 2
         LayerClass = ShareLockAlignmentLayer if sharelock else AlignmentLayer
         self.vlhead = LayerClass(
-            vision_dimesion = vision_dimesion,
-            text_dimension = self.text_model.model.config.hidden_size,
-            target_dimension = target_dimension,
+            vision_dim = vision_dim,
+            text_dim = self.text_model.model.config.hidden_size,
+            output_dim = output_dim,
             linear_type = linear_type,
             cast_dtype = cast_dtype,
             width_factor = width_factor,
         )  
         if vlhead_weights_path is not None:
-            self.load_vlhead_weights(vlhead_weights_path)
+            self.load_vlhead_weights(  )
 
     def freeze_except_vlhead(self):
         self._freeze_parameters(self.vision_model)
@@ -397,9 +417,9 @@ if __name__ == "__main__":
     from thop import profile
     # 初始化模型
     model = AlignmentLayer(
-        vision_dimesion=2048,
-        text_dimension=1024,  
-        target_dimension=1024, 
+        vision_dim=2048,
+        text_dim=1024,  
+        output_dim=1024, 
         linear_type="raw"    
     )
     
